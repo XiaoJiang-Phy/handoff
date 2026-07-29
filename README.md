@@ -28,8 +28,8 @@ host so it reloads Skill metadata.
 
 ## Manual cross-platform smoke test
 
-1. Codex explicitly requests `HANDOFF` (e.g., `handoff` or `交接`).
+1. Codex explicitly requests `HANDOFF` (e.g., `handoff` or `save context`).
 2. The agent writes the handoff record into the Git-ignored `doc/handoffs/` directory and updates `doc/handoffs/LATEST` after contract validation passes.
-3. Antigravity executes `RESUME` using "从 LATEST 继续", validates the handoff contract, and compares repository Git state.
+3. Antigravity executes `RESUME` using "continue from LATEST", validates the handoff contract, and compares repository Git state.
 4. After completing work, Antigravity can explicitly request `HANDOFF` back to Codex.
 5. All handoff files remain private in `doc/handoffs/` and must not be committed or pushed to version control.
