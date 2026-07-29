@@ -15,7 +15,10 @@ GENERATED_MARKER = ".handoff-bundles-generated"
 
 
 def _copy_skill(source: Path, destination: Path, include_agents: bool) -> None:
-    ignored = None if include_agents else shutil.ignore_patterns("agents")
+    ignored_names = ["__pycache__", "*.pyc", "*.pyo"]
+    if not include_agents:
+        ignored_names.append("agents")
+    ignored = shutil.ignore_patterns(*ignored_names)
     shutil.copytree(source, destination, symlinks=False, ignore=ignored)
 
 

@@ -34,6 +34,13 @@ class BuildBundlesTest(unittest.TestCase):
             self.assertTrue((codex / "scripts" / "manage_latest.py").is_file())
             self.assertTrue((antigravity / "SKILL.md").is_file())
             self.assertFalse((antigravity / "agents").exists())
+            self.assertFalse(
+                [
+                    path
+                    for path in output_root.rglob("*")
+                    if path.name == "__pycache__" or path.suffix in {".pyc", ".pyo"}
+                ]
+            )
             self.assertEqual(
                 (codex / "references" / "handoff-contract.md").read_text(),
                 (antigravity / "references" / "handoff-contract.md").read_text(),
