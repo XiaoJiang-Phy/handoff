@@ -34,6 +34,14 @@ def _run_git(repository: Path, *arguments: str) -> None:
 
 
 class CaptureGitStateTest(unittest.TestCase):
+    def test_rejects_non_utf8_nul_delimited_path(self) -> None:
+        module = _load_module(
+            "capture_git_state_non_utf8",
+            ROOT / "skills" / "handoff" / "scripts" / "capture_git_state.py",
+        )
+        with self.assertRaisesRegex(module.GitStateError, "non-UTF-8"):
+            module._decode_nul_paths(b"bad-\xff-name\0")
+
     def test_supports_repository_without_first_commit(self) -> None:
         module = _load_module(
             "capture_git_state_unborn",
@@ -47,6 +55,10 @@ class CaptureGitStateTest(unittest.TestCase):
 
         self.assertEqual(state["commit"], "unborn")
         self.assertTrue(state["dirty"])
+        self.assertEqual(
+            state["status_hash_format"],
+            "git-status-porcelain-v1-z-untracked-files-all",
+        )
 
     def test_captures_dirty_state_and_sanitizes_remote(self) -> None:
         module = _load_module(
@@ -122,6 +134,191 @@ class CaptureGitStateTest(unittest.TestCase):
             )
             with self.assertRaises(module.GitStateError):
                 module.capture_state(repository, ["tracked.txt"])
+
+    def test_preserves_and_hashes_special_untracked_names(self) -> None:
+        module = _load_module(
+            "capture_git_state_special_names",
+            ROOT / "skills" / "handoff" / "scripts" / "capture_git_state.py",
+        )
+        names = [
+            "中文.txt",
+            "with space.txt",
+            'with"quote.txt',
+            "with\ttab.txt",
+            "with\nnewline.txt",
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository = Path(temporary_directory)
+            _run_git(repository, "init", "-b", "main")
+            for index, name in enumerate(names):
+                (repository / name).write_bytes(f"content-{index}\n".encode())
+
+            state = module.capture_state(repository, names)
+
+        self.assertEqual(set(state["untracked_paths"]), set(names))
+        hashes = {
+            item["path"]: item["sha256"] for item in state["key_untracked_files"]
+        }
+        for index, name in enumerate(names):
+            self.assertEqual(
+                hashes[name], hashlib.sha256(f"content-{index}\n".encode()).hexdigest()
+            )
+
+    def test_status_hash_and_paths_ignore_core_quote_path(self) -> None:
+        module = _load_module(
+            "capture_git_state_quote_path",
+            ROOT / "skills" / "handoff" / "scripts" / "capture_git_state.py",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository = Path(temporary_directory)
+            _run_git(repository, "init", "-b", "main")
+            (repository / "中文.txt").write_text("content\n", encoding="utf-8")
+            _run_git(repository, "config", "core.quotePath", "true")
+            quoted = module.capture_state(repository, ["中文.txt"])
+            _run_git(repository, "config", "core.quotePath", "false")
+            unquoted = module.capture_state(repository, ["中文.txt"])
+
+        self.assertEqual(quoted["untracked_paths"], unquoted["untracked_paths"])
+        self.assertEqual(quoted["status_sha256"], unquoted["status_sha256"])
+        self.assertEqual(quoted["status_hash_format"], unquoted["status_hash_format"])
+
+    def test_tracked_modification_changes_status_and_diff_evidence(self) -> None:
+        module = _load_module(
+            "capture_git_state_modification",
+            ROOT / "skills" / "handoff" / "scripts" / "capture_git_state.py",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository = Path(temporary_directory)
+            _run_git(repository, "init", "-b", "main")
+            (repository / "tracked.txt").write_text("initial\n", encoding="utf-8")
+            _run_git(repository, "add", "tracked.txt")
+            _run_git(
+                repository,
+                "-c",
+                "user.name=Handoff Test",
+                "-c",
+                "user.email=handoff@example.invalid",
+                "commit",
+                "-m",
+                "initial",
+            )
+            clean = module.capture_state(repository, [])
+            (repository / "tracked.txt").write_text("changed\n", encoding="utf-8")
+            dirty = module.capture_state(repository, [])
+
+        self.assertNotEqual(clean["status_sha256"], dirty["status_sha256"])
+        self.assertNotEqual(
+            clean["unstaged_diff_sha256"], dirty["unstaged_diff_sha256"]
+        )
+
+    def test_rejects_missing_escape_and_oversized_hash_targets(self) -> None:
+        module = _load_module(
+            "capture_git_state_guards",
+            ROOT / "skills" / "handoff" / "scripts" / "capture_git_state.py",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository = Path(temporary_directory)
+            _run_git(repository, "init", "-b", "main")
+            (repository / "large.bin").write_bytes(b"12345")
+            with self.assertRaises(module.GitStateError):
+                module.capture_state(repository, ["missing.txt"])
+            with self.assertRaises(module.GitStateError):
+                module.capture_state(repository, ["../outside.txt"])
+            module.MAX_HASHED_UNTRACKED_BYTES = 4
+            with self.assertRaises(module.GitStateError):
+                module.capture_state(repository, ["large.bin"])
+
+
+class ScriptResolutionTest(unittest.TestCase):
+    def test_uses_skill_scripts_and_project_relative_handoff_paths(self) -> None:
+        skill_root = ROOT / "skills" / "handoff"
+        skill_scripts = ROOT / "skills" / "handoff" / "scripts"
+        skill_state_before = {
+            path.relative_to(skill_root): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in skill_root.rglob("*")
+            if path.is_file()
+        }
+        with tempfile.TemporaryDirectory(prefix="handoff project ") as temporary_directory:
+            repository = Path(temporary_directory)
+            _run_git(repository, "init", "-b", "main")
+            (repository / ".gitignore").write_text("doc/\n", encoding="utf-8")
+            decoy_scripts = repository / "scripts"
+            decoy_scripts.mkdir()
+            for name in (
+                "capture_git_state.py",
+                "validate_handoff.py",
+                "manage_latest.py",
+            ):
+                (decoy_scripts / name).write_text(
+                    "raise SystemExit(97)\n", encoding="utf-8"
+                )
+            handoffs = repository / "doc" / "handoffs"
+            handoffs.mkdir(parents=True)
+            handoff = handoffs / "20260729T120000Z-example-task.md"
+            handoff.write_text(valid_document(), encoding="utf-8")
+
+            capture_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(skill_scripts / "capture_git_state.py"),
+                    "--repository",
+                    ".",
+                ],
+                cwd=repository,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            validate_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(skill_scripts / "validate_handoff.py"),
+                    str(handoff.relative_to(repository)),
+                ],
+                cwd=repository,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            update_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(skill_scripts / "manage_latest.py"),
+                    "update",
+                    str(handoff.relative_to(repository)),
+                ],
+                cwd=repository,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            resolve_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(skill_scripts / "manage_latest.py"),
+                    "resolve",
+                    "doc/handoffs/LATEST",
+                ],
+                cwd=repository,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertTrue((repository / "doc" / "handoffs" / "LATEST").is_file())
+
+        skill_state_after = {
+            path.relative_to(skill_root): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in skill_root.rglob("*")
+            if path.is_file()
+        }
+
+        self.assertEqual(capture_result.returncode, 0, capture_result.stderr)
+        self.assertEqual(validate_result.returncode, 0, validate_result.stderr)
+        self.assertEqual(update_result.returncode, 0, update_result.stderr)
+        self.assertEqual(resolve_result.returncode, 0, resolve_result.stderr)
+        self.assertEqual(Path(resolve_result.stdout.strip()), handoff.resolve())
+        self.assertEqual(skill_state_before, skill_state_after)
 
 
 class ManageLatestTest(unittest.TestCase):

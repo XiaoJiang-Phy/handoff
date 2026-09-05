@@ -71,6 +71,8 @@ ABSOLUTE_PATH_PATTERNS = (
 
 MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SUPPORTED_FORMAT_VERSIONS = {2, 3}
+STATUS_HASH_FORMAT_V3 = "git-status-porcelain-v1-z-untracked-files-all"
 
 
 @dataclass(frozen=True)
@@ -111,9 +113,23 @@ def _validate_metadata(metadata: dict[str, Any]) -> list[Finding]:
             )
         )
 
-    if metadata.get("format_version") != 2:
+    format_version = metadata.get("format_version")
+    if format_version not in SUPPORTED_FORMAT_VERSIONS:
         findings.append(
-            Finding("ERROR", "metadata.version", "format_version must be 2.")
+            Finding(
+                "ERROR",
+                "metadata.version",
+                "format_version must be one of: 2, 3.",
+            )
+        )
+    elif format_version == 2:
+        findings.append(
+            Finding(
+                "WARNING",
+                "metadata.legacy_status_hash",
+                "format_version 2 uses the legacy status hash representation; "
+                "do not compare repository.status_sha256 directly with version 3.",
+            )
         )
 
     created_at = metadata.get("created_at")
@@ -168,7 +184,10 @@ def _validate_metadata(metadata: dict[str, Any]) -> list[Finding]:
             Finding("ERROR", "metadata.repository", "repository must be an object.")
         )
     else:
-        missing_repository = sorted(REQUIRED_REPOSITORY_FIELDS - repository.keys())
+        required_repository_fields = set(REQUIRED_REPOSITORY_FIELDS)
+        if format_version == 3:
+            required_repository_fields.add("status_hash_format")
+        missing_repository = sorted(required_repository_fields - repository.keys())
         if missing_repository:
             findings.append(
                 Finding(
@@ -185,6 +204,18 @@ def _validate_metadata(metadata: dict[str, Any]) -> list[Finding]:
                     "ERROR",
                     "metadata.repository_dirty",
                     "repository.dirty must be a boolean.",
+                )
+            )
+        if (
+            format_version == 3
+            and repository.get("status_hash_format") != STATUS_HASH_FORMAT_V3
+        ):
+            findings.append(
+                Finding(
+                    "ERROR",
+                    "metadata.repository_status_hash_format",
+                    "repository.status_hash_format must identify the version 3 "
+                    f"representation: {STATUS_HASH_FORMAT_V3}.",
                 )
             )
         for field_name in (

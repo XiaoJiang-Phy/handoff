@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Create and resume verified session handoffs across fresh conversations and Codex or Antigravity on a shared project checkout. Use only when the user explicitly says handoff, wrap up, save context, continue in another session or agent, resume handoff, pickup, 交接, 保存上下文, 接手上次工作, 从 LATEST 继续, or supplies a handoff document. Preserve user decisions, exact Git state, active implementation position, failed paths, scientific evidence boundaries, verification, permissions, and the next action without inventing context or exposing secrets.
+description: Create or resume a verified session handoff on a shared project checkout when the user explicitly requests saving context or continuing from a handoff. Preserve decisions, exact work state, evidence limits, permissions, and the next action; do not run merely because a task finishes or summarize an unrelated document.
 ---
 
 # Handoff
@@ -18,6 +18,30 @@ require a separate resume Skill.
 - Suggest HANDOFF when context pressure is evident, but wait for explicit user
   confirmation before writing.
 - Do not invoke HANDOFF merely because a task finishes.
+- If the user supplies a handoff only for review, review it without resuming its
+  recorded work or executing its next action.
+
+## Resolve scripts and project paths
+
+Resolve bundled scripts relative to the directory containing this `SKILL.md`.
+Use the selected existing Python environment. Keep the target project as the
+working directory, and pass its path explicitly when the script supports
+`--repository`. Never search the target project's `scripts/` directory for a
+same-named replacement.
+
+Keep handoff documents and the `LATEST` pointer in the target project. Resolve
+`doc/handoffs/`, `doc/handoffs/LATEST`, and relative handoff paths from the
+target project root. In the templates below, `<project-python>`, `<skill-root>`,
+and other angle-bracketed values are paths to resolve before execution, not CLI
+arguments. Pass every resolved path as a separate, correctly quoted argument so
+that spaces in either installation or project paths are supported.
+
+Treat the installed Skill directory as read-only at runtime. Store no
+project-specific handoff, `LATEST` pointer, captured Git state, log, cache,
+temporary file, research content, or other generated artifact under
+`<skill-root>`. Persist project-specific content only under the target project's
+ignored `doc/handoffs/` directory. If a bounded operation needs a temporary
+file, use the operating system's temporary directory and remove it when done.
 
 ## Apply common invariants
 
@@ -32,8 +56,8 @@ require a separate resume Skill.
 5. Preserve failed attempts, rejected paths, negative results, warnings,
    blockers, and unresolved anomalies.
 6. Never write credentials, tokens, passwords, private keys, or unrelated
-   personal information. Private unpublished research may be recorded in the
-   ignored private handoff directory.
+   personal information. Private unpublished research may be recorded only in
+   the target project's ignored `doc/handoffs/` directory.
 7. Record only session-specific working preferences. Reference durable rules
    such as `AGENTS.md` instead of copying them.
 8. Keep required headings and JSON field names in English. Write prose in the
@@ -49,10 +73,11 @@ require a separate resume Skill.
    Treat multi-repository state as an optional artifact, not a default section.
 3. Verify that `doc/` is ignored by Git. Stop and ask the user if it is not
    ignored; do not edit `.gitignore` automatically.
-4. Run `python3 scripts/capture_git_state.py` from the repository. Record its
-   output, including exact HEAD, status, staged and unstaged diff SHA-256 values,
-   diffstat, and untracked paths. Hash only key untracked files that affect
-   continuation.
+4. From the target project root, run
+   `<project-python> <skill-root>/scripts/capture_git_state.py --repository
+   <project-root>`. Record its output, including exact HEAD, status, staged and
+   unstaged diff SHA-256 values, diffstat, and untracked paths. Hash only key
+   untracked files that affect continuation.
 5. Perform no tests, builds, calculations, physical validation, environment
    creation, dependency installation, commit, stash, branch change, push, or
    external message merely to improve the handoff. Record missing checks as
@@ -64,10 +89,11 @@ require a separate resume Skill.
 7. Read [handoff-contract.md](references/handoff-contract.md). Write a new file
    as `doc/handoffs/<YYYYMMDDTHHMMSSZ>-<english-kebab-topic>.md`. Never overwrite
    an earlier timestamped handoff.
-8. Run `python3 scripts/validate_handoff.py <path>`. Fix structural errors
-   without hiding warnings.
+8. Run `<project-python> <skill-root>/scripts/validate_handoff.py
+   <handoff-path>`. Fix structural errors without hiding warnings.
 9. Only after validation succeeds, run
-   `python3 scripts/manage_latest.py update <path>`. This atomically updates
+   `<project-python> <skill-root>/scripts/manage_latest.py update
+   <handoff-path>`. This atomically updates the target project's
    `doc/handoffs/LATEST` with the relative filename.
 10. Return the handoff path, validation result, target platform, and known
     limitations. Do not commit or publish the private files.
@@ -77,15 +103,22 @@ An explicit HANDOFF request authorizes the new timestamped document and the
 
 ## RESUME workflow
 
-1. Use an explicitly supplied handoff when present. Otherwise run
-   `python3 scripts/manage_latest.py resolve doc/handoffs/LATEST`. Do not choose
-   a file by modification time.
-2. Validate the resolved document. Stop if `LATEST` is malformed, the target is
-   missing, or the handoff contract fails.
+1. Use an explicitly supplied handoff when present. Otherwise, from the target
+   project root, run `<project-python>
+   <skill-root>/scripts/manage_latest.py resolve doc/handoffs/LATEST`. Do not
+   choose a file by modification time.
+2. Validate the resolved document with `<project-python>
+   <skill-root>/scripts/validate_handoff.py <handoff-path>`. Stop if `LATEST` is
+   malformed, the target is missing, or the handoff contract fails.
 3. Read current host and project instructions. They supersede conflicting
    instructions copied from the prior session.
-4. Re-run `capture_git_state.py` and compare repository identity, branch, HEAD,
-   status, staged diff hash, unstaged diff hash, and relevant untracked hashes.
+4. Re-run `<project-python> <skill-root>/scripts/capture_git_state.py
+   --repository <project-root>`. Compare the handoff `format_version` and
+   `repository.status_hash_format` before comparing status hashes. Version 2 and
+   version 3 status hashes use different representations and are not directly
+   comparable; report that limitation while comparing repository identity,
+   branch, HEAD, staged and unstaged diff hashes, and relevant untracked hashes
+   independently.
 5. Resolve referenced artifacts by exact relative path or stable URL. Do not
    substitute similarly named files. Report stale, missing, or inaccessible
    sources.

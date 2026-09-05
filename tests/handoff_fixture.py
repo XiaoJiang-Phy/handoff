@@ -3,14 +3,14 @@ from __future__ import annotations
 import textwrap
 
 
-def valid_document() -> str:
-    return textwrap.dedent(
+def valid_document(format_version: int = 3) -> str:
+    document = textwrap.dedent(
         """\
         # Handoff: validator test
 
         ```json
         {
-          "format_version": 2,
+          "format_version": 3,
           "created_at": "2026-07-29T12:00:00Z",
           "source_platform": "codex",
           "target_platform": "antigravity",
@@ -23,6 +23,7 @@ def valid_document() -> str:
             "branch": "main",
             "commit": "0123456789abcdef0123456789abcdef01234567",
             "dirty": false,
+            "status_hash_format": "git-status-porcelain-v1-z-untracked-files-all",
             "status_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "unstaged_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "staged_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -87,3 +88,15 @@ def valid_document() -> str:
         Read the referenced artifact.
         """
     )
+    if format_version == 2:
+        return document.replace(
+            '"format_version": 3', '"format_version": 2'
+        ).replace(
+            '    "status_hash_format": "git-status-porcelain-v1-z-untracked-files-all",\n',
+            "",
+        )
+    if format_version != 3:
+        return document.replace(
+            '"format_version": 3', f'"format_version": {format_version}'
+        )
+    return document

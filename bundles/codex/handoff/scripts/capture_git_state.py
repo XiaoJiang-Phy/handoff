@@ -13,6 +13,14 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 MAX_HASHED_UNTRACKED_BYTES = 64 * 1024 * 1024
+STATUS_HASH_FORMAT = "git-status-porcelain-v1-z-untracked-files-all"
+STATUS_HASH_ARGUMENTS = (
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+    "--ignore-submodules=none",
+)
 
 
 class GitStateError(RuntimeError):
@@ -57,6 +65,22 @@ def _git_sha256(repository: Path, *arguments: str) -> str:
         detail = stderr.decode("utf-8", errors="replace").strip()
         raise GitStateError(detail or f"git {' '.join(arguments)} failed")
     return digest.hexdigest()
+
+
+def _decode_nul_paths(data: bytes) -> list[str]:
+    if not data:
+        return []
+    if not data.endswith(b"\0"):
+        raise GitStateError("Git returned a malformed NUL-delimited path list")
+    records = data[:-1].split(b"\0")
+    if any(not record for record in records):
+        raise GitStateError("Git returned an empty path in a NUL-delimited path list")
+    try:
+        return [record.decode("utf-8", errors="strict") for record in records]
+    except UnicodeDecodeError as exc:
+        raise GitStateError(
+            "Git returned a non-UTF-8 untracked path; exact path hashing is unsupported"
+        ) from exc
 
 
 def _sanitize_remote(remote: str) -> str:
@@ -104,7 +128,16 @@ def _hash_untracked(
 
 def capture_state(repository: Path, hash_untracked: list[str]) -> dict[str, object]:
     root = Path(_git_text(repository, "rev-parse", "--show-toplevel")).resolve()
-    status_bytes = _git_bytes(root, "status", "--short", "--untracked-files=all")
+    status_bytes = _git_bytes(root, *STATUS_HASH_ARGUMENTS)
+    status_short = _git_bytes(
+        root,
+        "-c",
+        "core.quotePath=false",
+        "status",
+        "--short",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    ).decode("utf-8", errors="strict").splitlines()
     branch = _git_text(root, "branch", "--show-current") or "detached"
     remote_result = subprocess.run(
         ["git", "-C", str(root), "remote", "get-url", "origin"],
@@ -126,9 +159,9 @@ def capture_state(repository: Path, hash_untracked: list[str]) -> dict[str, obje
         if commit_result.returncode == 0
         else "unborn"
     )
-    untracked_paths = _git_text(
-        root, "ls-files", "--others", "--exclude-standard"
-    ).splitlines()
+    untracked_paths = _decode_nul_paths(
+        _git_bytes(root, "ls-files", "--others", "--exclude-standard", "-z")
+    )
 
     return {
         "root": ".",
@@ -136,7 +169,8 @@ def capture_state(repository: Path, hash_untracked: list[str]) -> dict[str, obje
         "branch": branch,
         "commit": commit,
         "dirty": bool(status_bytes),
-        "status_short": status_bytes.decode("utf-8", errors="strict").splitlines(),
+        "status_short": status_short,
+        "status_hash_format": STATUS_HASH_FORMAT,
         "status_sha256": _sha256(status_bytes),
         "unstaged_diff_sha256": _git_sha256(
             root, "diff", "--binary", "--no-ext-diff"

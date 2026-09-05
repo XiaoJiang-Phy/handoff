@@ -31,6 +31,42 @@ class ValidateHandoffTest(unittest.TestCase):
         findings = module.validate_text(valid_document())
         self.assertFalse([finding for finding in findings if finding.level == "ERROR"])
 
+    def test_accepts_legacy_version_two_with_compatibility_warning(self) -> None:
+        module = _load_validator_module()
+        findings = module.validate_text(valid_document(format_version=2))
+        self.assertFalse([finding for finding in findings if finding.level == "ERROR"])
+        self.assertIn(
+            "metadata.legacy_status_hash",
+            {finding.code for finding in findings},
+        )
+
+    def test_rejects_version_three_without_status_hash_format(self) -> None:
+        module = _load_validator_module()
+        document = valid_document().replace(
+            '    "status_hash_format": "git-status-porcelain-v1-z-untracked-files-all",\n',
+            "",
+        )
+        findings = module.validate_text(document)
+        codes = {finding.code for finding in findings}
+        self.assertIn("metadata.repository_fields", codes)
+        self.assertIn("metadata.repository_status_hash_format", codes)
+
+    def test_rejects_unknown_status_hash_format(self) -> None:
+        module = _load_validator_module()
+        document = valid_document().replace(
+            "git-status-porcelain-v1-z-untracked-files-all",
+            "unknown-status-format",
+        )
+        findings = module.validate_text(document)
+        codes = {finding.code for finding in findings}
+        self.assertIn("metadata.repository_status_hash_format", codes)
+
+    def test_rejects_unsupported_format_version(self) -> None:
+        module = _load_validator_module()
+        findings = module.validate_text(valid_document(format_version=4))
+        codes = {finding.code for finding in findings}
+        self.assertIn("metadata.version", codes)
+
     def test_rejects_missing_required_section(self) -> None:
         module = _load_validator_module()
         document = valid_document().replace(

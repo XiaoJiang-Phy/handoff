@@ -11,7 +11,7 @@ the primary language of the source conversation. Use `None recorded`, `Not run`,
 
 ```json
 {
-  "format_version": 2,
+  "format_version": 3,
   "created_at": "YYYY-MM-DDTHH:MM:SSZ",
   "source_platform": "codex",
   "target_platform": "antigravity",
@@ -24,6 +24,7 @@ the primary language of the source conversation. Use `None recorded`, `Not run`,
     "branch": "branch or unknown",
     "commit": "full commit SHA or unknown",
     "dirty": true,
+    "status_hash_format": "git-status-porcelain-v1-z-untracked-files-all",
     "status_sha256": "<64 lowercase hex>",
     "unstaged_diff_sha256": "<64 lowercase hex>",
     "staged_diff_sha256": "<64 lowercase hex>"
@@ -131,10 +132,32 @@ Add this optional section when routed by `scientific-continuity.md`.
 - Use `project-linked` for the normal Codex ↔ Antigravity shared-checkout case.
 - Default `privacy` to `private`.
 - Use a full commit SHA when Git provides one.
-- Compute Git hashes from raw command output through `capture_git_state.py`.
+- Write new handoffs as `format_version: 3`. The validator continues to accept
+  immutable version 2 documents for resume and review; do not rewrite an old
+  document to upgrade it.
+- In version 3, compute `repository.status_sha256` from the exact raw bytes of
+  `git status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none`.
+  Set `repository.status_hash_format` to
+  `git-status-porcelain-v1-z-untracked-files-all`.
+- Version 2 computed `repository.status_sha256` from the readable output of
+  `git status --short --untracked-files=all`. A version 2 status hash and a
+  version 3 status hash are not directly comparable. Report the representation
+  mismatch and compare the remaining repository evidence independently.
+- Keep readable status output separate from the status hash input. Display
+  formatting and line splitting do not define repository identity.
+- Enumerate untracked files from the raw NUL-delimited output of
+  `git ls-files --others --exclude-standard -z`. Decode supported paths as
+  strict UTF-8 and report unsupported path encodings instead of substituting
+  characters.
+- Compute staged and unstaged diff hashes from raw command output through
+  `capture_git_state.py`; their representation is unchanged between versions 2
+  and 3.
 - Use the SHA-256 of empty bytes for an empty staged or unstaged diff.
 - Keep `repository.root` as `.`. Put machine-specific absolute paths nowhere in
   the portable document unless they are unavoidable and explicitly identified.
+- Keep every persistent project-specific artifact under the target project's
+  ignored `doc/handoffs/` directory. The installed Skill directory contains
+  reusable Skill files only and remains read-only during handoff and resume.
 
 ## Evidence and decision labels
 
